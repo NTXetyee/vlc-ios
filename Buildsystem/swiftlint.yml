@@ -23,6 +23,7 @@ excluded:
   - Pods
   - .bundle
   - fastlane
+  - Anime4KPlayer/Sources/Anime4KMetalCore # vendored Anime4KMetal (vlc-ios Anime4K fork)
 
 custom_rules:
   equal_sign_whitespace:

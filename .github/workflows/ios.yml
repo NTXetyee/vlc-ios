@@ -65,7 +65,7 @@ jobs:
         id: spm-cache
         uses: actions/cache@v4
         with:
-          path: SourcePackages
+          path: ~/SourcePackages
           key: spm-${{ runner.os }}-${{ hashFiles('VLC.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
@@ -79,7 +79,7 @@ jobs:
         run: |
           start=$(date +%s)
           xcodebuild -resolvePackageDependencies -workspace VLC.xcworkspace -scheme VLC-iOS-no-watch \
-            -clonedSourcePackagesDirPath SourcePackages
+            -clonedSourcePackagesDirPath "$HOME/SourcePackages"
           echo "SPM_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
 
       - name: Archive (unsigned, device)
@@ -93,7 +93,7 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/VLC.xcarchive \
-            -clonedSourcePackagesDirPath SourcePackages \
+            -clonedSourcePackagesDirPath "$HOME/SourcePackages" \
             -onlyUsePackageVersionsFromResolvedFile \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             | tee build/xcodebuild.log | xcbeautify --renderer github-actions
@@ -114,7 +114,7 @@ jobs:
         run: |
           vlckit=$(grep -A6 '"identity" : "vlckit"' VLC.xcworkspace/xcshareddata/swiftpm/Package.resolved | grep '"version"' | sed 's/.*: "\(.*\)".*/\1/')
           target=$(xcodebuild -showBuildSettings -workspace VLC.xcworkspace -scheme VLC-iOS-no-watch -configuration Release \
-                     -clonedSourcePackagesDirPath SourcePackages 2>/dev/null | grep -m1 ' IPHONEOS_DEPLOYMENT_TARGET' | awk '{print $3}')
+                     -clonedSourcePackagesDirPath "$HOME/SourcePackages" 2>/dev/null | grep -m1 ' IPHONEOS_DEPLOYMENT_TARGET' | awk '{print $3}')
           size=$(ls -la build/VLC-unsigned.ipa 2>/dev/null | awk '{print $5}')
           {
             echo "## Device build"
