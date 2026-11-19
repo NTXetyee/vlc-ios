@@ -51,6 +51,14 @@ jobs:
       - name: Lint project file
         run: plutil -lint VLC.xcodeproj/project.pbxproj
 
+      - name: Disable SwiftLint build phase
+        # VLC runs SwiftLint during the build when it is installed. The runner image has a newer
+        # SwiftLint that resolves Buildsystem/swiftlint.yml excludes relative to Buildsystem/, so it
+        # lints Pods and fails the archive. VLC's script skips linting when swiftlint is absent.
+        run: |
+          for p in $(which -a swiftlint 2>/dev/null); do sudo rm -f "$p"; echo "removed $p"; done
+          which swiftlint || echo "swiftlint disabled"
+
       - name: Cache CocoaPods
         id: pods-cache
         uses: actions/cache@v4
