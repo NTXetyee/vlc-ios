@@ -13,6 +13,8 @@
 // limitations under the License.
 //
 
+// Modified for vlc-ios Anime4K fork (Anime4KPlayer package): see Anime4KPlayer/VENDORED.md.
+
 import Foundation
 
 struct MPVShader {
@@ -135,7 +137,11 @@ using mat4 = float4x4;
         // Normalize coordinates to [0, 1]
         body += """
 kernel void \(functionName)(\(entryArgs)) {
-    float2 mtlPos = float2(gid) / (float2(output.get_width(), output.get_height()) - float2(1, 1));
+    // vlc-ios fork: skip threads past the edge (grid is rounded up to whole threadgroups)
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+    // vlc-ios fork: sample at pixel centres, matching mpv's HOOKED_pos (upstream used gid / (size - 1),
+    // which shifts the image by up to half a pixel: the "not subpixel-aligned" known issue)
+    float2 mtlPos = (float2(gid) + float2(0.5, 0.5)) / float2(output.get_width(), output.get_height());
     output.write(hook(\(hookCallArgs)), gid);
 }
 

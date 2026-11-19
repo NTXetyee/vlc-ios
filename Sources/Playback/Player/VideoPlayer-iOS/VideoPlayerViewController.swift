@@ -15,6 +15,9 @@
 import UIKit
 import AVFoundation
 import MediaPlayer
+#if canImport(Anime4KPlayer)
+import Anime4KPlayer // vlc-ios Anime4K fork
+#endif
 
 @objc(VLCVideoPlayerViewControllerDelegate)
 protocol VideoPlayerViewControllerDelegate: AnyObject {
@@ -617,6 +620,11 @@ class VideoPlayerViewController: PlayerViewController {
 #endif
 #if os(iOS) && canImport(MediaIntents) // iOS 27 SDK
         setupExternalDisplayAccessory()
+#endif
+#if canImport(Anime4KPlayer)
+        // vlc-ios Anime4K fork: frame hook + controls (pass-through while upscaling is off)
+        Anime4KController.shared.install()
+        Anime4KController.shared.attachControls(to: view)
 #endif
     }
 

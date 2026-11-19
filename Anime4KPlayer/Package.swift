@@ -10,10 +10,9 @@ let package = Package(
     name: "Anime4KPlayer",
     platforms: [
         .iOS(.v15),
-        .macOS(.v12),
     ],
     products: [
-        .library(name: "Anime4KPlayer", targets: ["Anime4KMetalCore"]),
+        .library(name: "Anime4KPlayer", targets: ["Anime4KPlayer"]),
     ],
     targets: [
         // Vendored from imxieyi/Anime4KMetal (Apache-2.0) + bloc97/Anime4K GLSL (MIT).
@@ -23,6 +22,15 @@ let package = Package(
             resources: [
                 .copy("Resources/glsl"),
             ]
+        ),
+        // Our code: frame hook, ingest, pipeline, settings, controls.
+        .target(
+            name: "Anime4KPlayer",
+            dependencies: ["Anime4KMetalCore"]
+        ),
+        .testTarget(
+            name: "Anime4KPlayerTests",
+            dependencies: ["Anime4KPlayer", "Anime4KMetalCore"]
         ),
         .testTarget(
             name: "Anime4KMetalCoreTests",

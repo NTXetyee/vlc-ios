@@ -42,6 +42,12 @@ jobs:
           sw_vers; uname -m
           pod --version
 
+      - name: Ensure Metal Toolchain (separate download since Xcode 26)
+        run: |
+          if xcrun metal --version >/dev/null 2>&1; then echo "Metal toolchain present"; else
+            start=$(date +%s); xcodebuild -downloadComponent MetalToolchain; echo "downloaded in $(( $(date +%s) - start )) s"; fi
+          xcrun metal --version
+
       - name: Lint project file
         run: plutil -lint VLC.xcodeproj/project.pbxproj
 
@@ -156,6 +162,12 @@ jobs:
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
           xcrun simctl list devices available | grep -i ipad || true
+
+      - name: Ensure Metal Toolchain (separate download since Xcode 26)
+        run: |
+          if xcrun metal --version >/dev/null 2>&1; then echo "Metal toolchain present"; else
+            start=$(date +%s); xcodebuild -downloadComponent MetalToolchain; echo "downloaded in $(( $(date +%s) - start )) s"; fi
+          xcrun metal --version
 
       - name: Test on iOS Simulator
         run: |

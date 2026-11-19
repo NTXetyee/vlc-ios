@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A4A400000000000000000011 /* Anime4KPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = A4A400000000000000000021 /* Anime4KPlayer */; };
+		A4A400000000000000000012 /* Anime4KPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = A4A400000000000000000022 /* Anime4KPlayer */; };
 		020A4909B475FEF2466A63A0 /* VLCDownloadProgressView.m in Sources */ = {isa = PBXBuildFile; fileRef = B785438BB91E3F75B6B42B1E /* VLCDownloadProgressView.m */; };
 		02ADC5D2F265D63EB606E793 /* LibraryTabSearchDataSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B8FFA282897F8D52DDF3F41 /* LibraryTabSearchDataSource.swift */; };
 		0A83D7D26F3FCA84F5BF9DF2 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
@@ -1762,6 +1764,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A4A400000000000000000001 /* Anime4KPlayer */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Anime4KPlayer; sourceTree = "<group>"; };
 		09DF5C43BEEACDF6DB606E06 /* libPods-VLC-iOS.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-VLC-iOS.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		0B8FFA282897F8D52DDF3F41 /* LibraryTabSearchDataSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTabSearchDataSource.swift; sourceTree = "<group>"; };
 		0F007EAF2C2B46440042A95F /* VLCMLMedia+isWatched.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "VLCMLMedia+isWatched.h"; sourceTree = "<group>"; };
@@ -2884,6 +2887,7 @@
 				7D94FCE116DE7D1000F2623B /* Foundation.framework in Frameworks */,
 				7D94FCE316DE7D1000F2623B /* CoreGraphics.framework in Frameworks */,
 				7D1E8F01300E44730014A118 /* OBSlider in Frameworks */,
+				A4A400000000000000000011 /* Anime4KPlayer in Frameworks */,
 				0A83D7D26F3FCA84F5BF9DF2 /* (null) in Frameworks */,
 				7DED9DE3300D29FA006CAFFA /* CocoaHTTPServer in Frameworks */,
 				5D2FF65C2C9E21EBF46A7998 /* libPods-VLC-iOS.a in Frameworks */,
@@ -2914,6 +2918,7 @@
 				7DA5155A2EF82B63000C9995 /* MediaPlayer.framework in Frameworks */,
 				7DA5155B2EF82B63000C9995 /* MessageUI.framework in Frameworks */,
 				7D1E8EFF300E446D0014A118 /* OBSlider in Frameworks */,
+				A4A400000000000000000012 /* Anime4KPlayer in Frameworks */,
 				7DA5155C2EF82B63000C9995 /* SystemConfiguration.framework in Frameworks */,
 				7DA5155D2EF82B63000C9995 /* Security.framework in Frameworks */,
 				7DA5155E2EF82B63000C9995 /* CFNetwork.framework in Frameworks */,
@@ -3863,6 +3868,7 @@
 				D993036C2BE3C9800035E6FF /* VLC-iOSDebug.entitlements */,
 				D993036B2BE3C0C00035E6FF /* MediaLibraryWidgetExtensionDebug.entitlements */,
 				DD29A3E81BF21E3D00A27A91 /* SharedConfig.xcconfig */,
+				A4A400000000000000000001 /* Anime4KPlayer */,
 				7DC7BA6C28C892EA00109F28 /* Sources */,
 				A7924697170F0ED20036AAF2 /* Resources */,
 				7DB40AA028C7B49700EDACA0 /* Testing */,
@@ -9547,6 +9553,14 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A4A400000000000000000021 /* Anime4KPlayer */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Anime4KPlayer;
+		};
+		A4A400000000000000000022 /* Anime4KPlayer */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Anime4KPlayer;
+		};
 		7D018FB0301CC5E600900340 /* VLCMediaLibraryKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 7D018FAF301CC5E600900340 /* XCRemoteSwiftPackageReference "VLCMediaLibraryKit" */;

@@ -18,14 +18,14 @@
 import Foundation
 import MetalKit
 
-class Anime4K {
+public final class Anime4K {
     #if targetEnvironment(macCatalyst)
-    static let bufferCount = 3
+    public static let bufferCount = 3
     #else
-    static let bufferCount = 2
+    public static let bufferCount = 2
     #endif
     
-    let name: String
+    public let name: String
     let shaders: [MPVShader]
     let libraries: [MTLLibrary]
     let defaultLibrary: MTLLibrary
@@ -39,14 +39,14 @@ class Anime4K {
     var sizeMap: [String: (Float, Float)]
     var bufferIndex = -1
     
-    var outputW: Float = 0
-    var outputH: Float = 0
+    public private(set) var outputW: Float = 0
+    public private(set) var outputH: Float = 0
     var textureInW: Float = 0
     var textureInH: Float = 0
     var displayActualW: Float = 0
     var displayActualH: Float = 0
     
-    init(_ name: String, subdir: String, device: MTLDevice) throws {
+    public init(_ name: String, subdir: String, device: MTLDevice) throws {
         self.name = name
         self.enabledShaders = []
         self.nearestSamplerStates = []
@@ -69,7 +69,10 @@ class Anime4K {
         defaultLibrary = try device.makeDefaultLibrary(bundle: .module)
     }
     
-    func compileShaders(_ device: MTLDevice, videoInW: Int, videoInH: Int, textureInW: Int, textureInH: Int, displayOutW: Int, displayOutH: Int) throws {
+    /// vlc-ios fork: number of GLSL passes active for the current sizes (after WHEN conditions).
+    public var activePassCount: Int { enabledShaders.count }
+
+    public func compileShaders(_ device: MTLDevice, videoInW: Int, videoInH: Int, textureInW: Int, textureInH: Int, displayOutW: Int, displayOutH: Int) throws {
         enabledShaders.removeAll()
         nearestSamplerStates.removeAll()
         linearSamplerStates.removeAll()
@@ -163,7 +166,7 @@ class Anime4K {
         finalResizePS = try device.makeComputePipelineState(function: defaultLibrary.makeFunction(name: "CenterResize")!)
     }
     
-    func encode(_ device: MTLDevice, cmdBuf: MTLCommandBuffer, input: MTLTexture) throws -> MTLTexture {
+    public func encode(_ device: MTLDevice, cmdBuf: MTLCommandBuffer, input: MTLTexture) throws -> MTLTexture {
         guard pipelineStates.count == enabledShaders.count else {
             throw Anime4KError.encoderFail("Pipeline state count \(pipelineStates.count) mismatch shader count \(shaders.count)")
         }
@@ -189,14 +192,20 @@ class Anime4K {
         textureMap[bufferIndex]["MAIN"] = input
         textureMap[bufferIndex]["NATIVE"] = input
         
-        let desc = MTLTextureDescriptor()
-        desc.width = Int(outputW)
-        desc.height = Int(outputH)
-        desc.pixelFormat = .rgba16Float
-        desc.usage = [.shaderWrite, .shaderRead]
-        desc.storageMode = .private
-        textureMap[bufferIndex]["output"] = device.makeTexture(descriptor: desc)
-        
+        // vlc-ios fork: reuse the output texture across frames (upstream allocated one per frame).
+        // Safe because textures rotate over `bufferCount` slots and callers keep <= bufferCount frames in flight.
+        if let existing = textureMap[bufferIndex]["output"], existing.width == Int(outputW), existing.height == Int(outputH) {
+            // keep
+        } else {
+            let desc = MTLTextureDescriptor()
+            desc.width = Int(outputW)
+            desc.height = Int(outputH)
+            desc.pixelFormat = .rgba16Float
+            desc.usage = [.shaderWrite, .shaderRead]
+            desc.storageMode = .private
+            textureMap[bufferIndex]["output"] = device.makeTexture(descriptor: desc)
+        }
+
         for i in 0..<enabledShaders.count {
             let shader = enabledShaders[i]
             var outputW = textureInW
@@ -281,8 +290,8 @@ class Anime4K {
     
 }
 
-enum Anime4KError: Error, LocalizedError {
-    var errorDescription: String? {
+public enum Anime4KError: Error, LocalizedError {
+    public var errorDescription: String? {
         switch self {
         case let .fileNotFound(msg):
             return "Cannot find file: " + msg
