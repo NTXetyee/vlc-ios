@@ -1,0 +1,12 @@
+# Fork addition: keep files LF so macOS CI is not affected by Windows checkouts.
+* text=auto eol=lf
+*.sh text eol=lf
+*.pbxproj text eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
+*.ttf binary
+*.otf binary
+*.car binary
+*.ipa binary
+*.zip binary

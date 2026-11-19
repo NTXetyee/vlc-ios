@@ -1,0 +1,165 @@
+# Fork CI: builds VLC for iOS on GitHub's macOS runners (no local Mac needed).
+#  - device-build: unsigned Release archive for real devices -> IPA artifact
+#  - package-tests: Anime4KPlayer Swift package tests on the iOS Simulator
+name: iOS
+
+on:
+  push:
+    branches: [master, "anime4k/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned deliberately. macos-26 (arm64) ships Xcode 26.0.1 ... 26.6; 26.6 has the iOS 26.5 SDK.
+  XCODE_APP: /Applications/Xcode_26.6.app
+  SIM_DEVICE: "iPad mini (A17 Pro)"
+  SIM_OS: "26.5"
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+
+jobs:
+  device-build:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode and print toolchain
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          xcodebuild -showsdks
+          sw_vers; uname -m
+          pod --version
+
+      - name: Lint project file
+        run: plutil -lint VLC.xcodeproj/project.pbxproj
+
+      - name: Cache CocoaPods
+        id: pods-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('Podfile.lock') }}
+          restore-keys: pods-${{ runner.os }}-
+
+      - name: Cache Swift packages (VLCKit binary etc.)
+        id: spm-cache
+        uses: actions/cache@v4
+        with:
+          path: SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('VLC.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: pod install
+        run: |
+          start=$(date +%s)
+          pod install
+          echo "POD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Resolve Swift packages
+        run: |
+          start=$(date +%s)
+          xcodebuild -resolvePackageDependencies -workspace VLC.xcworkspace -scheme VLC-iOS-no-watch \
+            -clonedSourcePackagesDirPath SourcePackages
+          echo "SPM_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Archive (unsigned, device)
+        run: |
+          set -o pipefail
+          mkdir -p build
+          start=$(date +%s)
+          xcodebuild archive \
+            -workspace VLC.xcworkspace \
+            -scheme VLC-iOS-no-watch \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/VLC.xcarchive \
+            -clonedSourcePackagesDirPath SourcePackages \
+            -onlyUsePackageVersionsFromResolvedFile \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee build/xcodebuild.log | xcbeautify --renderer github-actions
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Package unsigned IPA
+        run: |
+          app=$(ls -d build/VLC.xcarchive/Products/Applications/*.app | head -1)
+          echo "App: $app"
+          mkdir -p build/ipa/Payload
+          cp -R "$app" build/ipa/Payload/
+          (cd build/ipa && zip -qry ../VLC-unsigned.ipa Payload)
+          ls -la build/VLC-unsigned.ipa
+          (cd build/VLC.xcarchive && zip -qry ../VLC-dSYMs.zip dSYMs)
+
+      - name: Build report
+        if: always()
+        run: |
+          vlckit=$(grep -A6 '"identity" : "vlckit"' VLC.xcworkspace/xcshareddata/swiftpm/Package.resolved | grep '"version"' | sed 's/.*: "\(.*\)".*/\1/')
+          target=$(xcodebuild -showBuildSettings -workspace VLC.xcworkspace -scheme VLC-iOS-no-watch -configuration Release \
+                     -clonedSourcePackagesDirPath SourcePackages 2>/dev/null | grep -m1 ' IPHONEOS_DEPLOYMENT_TARGET' | awk '{print $3}')
+          size=$(ls -la build/VLC-unsigned.ipa 2>/dev/null | awk '{print $5}')
+          {
+            echo "## Device build"
+            echo "| | |"; echo "|---|---|"
+            echo "| Xcode | $(xcodebuild -version | tr '\n' ' ') |"
+            echo "| VLCKit (Package.resolved) | $vlckit |"
+            echo "| Deployment target | ${target:-?} |"
+            echo "| Pods cache hit | ${{ steps.pods-cache.outputs.cache-hit }} |"
+            echo "| SPM cache hit | ${{ steps.spm-cache.outputs.cache-hit }} |"
+            echo "| pod install | ${POD_SECONDS:-?} s |"
+            echo "| package resolve | ${SPM_SECONDS:-?} s |"
+            echo "| archive | ${BUILD_SECONDS:-?} s |"
+            echo "| IPA size | ${size:-n/a} bytes |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VLC-unsigned-ipa
+          path: build/VLC-unsigned.ipa
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VLC-dSYMs
+          path: build/VLC-dSYMs.zip
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+
+  package-tests:
+    runs-on: macos-26
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Anime4KPlayer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          xcrun simctl list devices available | grep -i ipad || true
+
+      - name: Test on iOS Simulator
+        run: |
+          set -o pipefail
+          mkdir -p ../build
+          xcodebuild -list
+          scheme=$(xcodebuild -list -json | python3 -c 'import json,sys; s=json.load(sys.stdin)["workspace"]["schemes"]; print(next((x for x in s if x.endswith("-Package")), s[0]))')
+          echo "Scheme: $scheme"
+          xcodebuild test -scheme "$scheme" \
+            -destination "platform=iOS Simulator,name=$SIM_DEVICE,OS=$SIM_OS" \
+            -resultBundlePath ../build/PackageTests.xcresult \
+            | tee ../build-tests.log | xcbeautify --renderer github-actions
+          grep -E '^\[(parse|metal)\]' ../build-tests.log >> "$GITHUB_STEP_SUMMARY" || true
