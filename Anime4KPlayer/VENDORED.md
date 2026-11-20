@@ -12,6 +12,8 @@
     (`Bundle.module`) instead of `Bundle(for:)` / `.main`; removed the per-pass
     dump of generated Metal source to stdout; public API for the Anime4KPlayer target;
     the per-frame "output" texture is reused instead of allocated every frame.
+    Parsed shaders and compiled Metal libraries come from `ShaderLibraryCache.swift` (ours):
+    compiled once per app session, passes in parallel, with a `prewarm` entry point.
   - `MPVShader.swift`: generated kernels sample at pixel centres (`(gid + 0.5) / size`
     instead of `gid / (size - 1)`, the cause of upstream's "not subpixel-aligned" known
     issue) and skip threads outside the output texture.

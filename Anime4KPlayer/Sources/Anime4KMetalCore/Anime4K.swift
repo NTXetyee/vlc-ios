@@ -54,19 +54,12 @@ public final class Anime4K {
         self.pipelineStates = []
         self.textureMap = []
         self.sizeMap = [:]
-        guard let glslFile = Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "glsl/" + subdir) else {
-            throw Anime4KError.fileNotFound(name)
-        }
-        let data = try Data(contentsOf: glslFile)
-        guard let glsl = String(data: data, encoding: .utf8) else {
-            throw Anime4KError.fileCorrupt(name)
-        }
-        shaders = try MPVShader.parse(glsl)
-        print("Trying to compile GLSL shaders in " + name)
-        libraries = try shaders.map { shader in
-            return try device.makeLibrary(source: shader.metalCode, options: nil)
-        }
-        defaultLibrary = try device.makeDefaultLibrary(bundle: .module)
+        // vlc-ios fork: parsed shaders and compiled libraries come from a shared cache
+        // (compiled in parallel on first use) instead of being rebuilt for every instance.
+        let entry = try ShaderLibraryCache.shared.entry(name, subdir: subdir, device: device)
+        shaders = entry.shaders
+        libraries = entry.libraries
+        defaultLibrary = try ShaderLibraryCache.shared.defaultLibrary(device: device)
     }
     
     /// vlc-ios fork: number of GLSL passes active for the current sizes (after WHEN conditions).

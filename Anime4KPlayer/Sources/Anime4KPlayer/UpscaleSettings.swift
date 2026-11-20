@@ -52,13 +52,30 @@ public struct UpscaleSettings: Codable, Equatable, Sendable {
     public var mode: Anime4KMode = .a
     public var size: ModelSize = .m
     public var showStats: Bool = true
+    /// Always run the ×2 upscale network, even when the screen is less than 1.2× the video
+    /// (Anime4K's own threshold skips it), then resample down to the screen.
+    public var forceUpscale: Bool = false
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case enabled, model, mode, size, showStats, forceUpscale }
+
+    // Hand-written so settings saved by older builds (missing newer keys) still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = UpscaleSettings()
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
+        model = (try? c.decodeIfPresent(UpscaleModel.self, forKey: .model)) ?? d.model
+        mode = (try? c.decodeIfPresent(Anime4KMode.self, forKey: .mode)) ?? d.mode
+        size = (try? c.decodeIfPresent(ModelSize.self, forKey: .size)) ?? d.size
+        showStats = try c.decodeIfPresent(Bool.self, forKey: .showStats) ?? d.showStats
+        forceUpscale = try c.decodeIfPresent(Bool.self, forKey: .forceUpscale) ?? d.forceUpscale
+    }
 
     /// Short label for toasts and the overlay, e.g. "Anime4K · Mode A · M".
     public var label: String {
         guard enabled else { return "Off" }
-        return "\(model.displayName) · \(mode.displayName) · \(size.rawValue)"
+        return "\(model.displayName) · \(mode.displayName) · \(size.rawValue)" + (forceUpscale ? " · force ×2" : "")
     }
 
     private static let defaultsKey = "Anime4KPlayer.settings.v1"

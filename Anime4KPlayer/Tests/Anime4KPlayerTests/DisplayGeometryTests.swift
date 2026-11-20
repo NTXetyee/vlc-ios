@@ -40,7 +40,8 @@ final class DisplayGeometryTests: XCTestCase {
         var pb: CVPixelBuffer?
         XCTAssertEqual(CVPixelBufferCreate(nil, 1920, 1088, kCVPixelFormatType_32BGRA, nil, &pb), kCVReturnSuccess)
         let buffer = try XCTUnwrap(pb)
-        XCTAssertEqual(DisplayGeometry.visibleRect(of: buffer), CGRect(x: 0, y: 0, width: 1920, height: 1088))
+        // No clean aperture: 16:9 macroblock padding is recognised.
+        XCTAssertEqual(DisplayGeometry.visibleRect(of: buffer), CGRect(x: 0, y: 0, width: 1920, height: 1080))
         let aperture: [String: Any] = [
             kCVImageBufferCleanApertureWidthKey as String: 1920,
             kCVImageBufferCleanApertureHeightKey as String: 1080,
@@ -49,5 +50,22 @@ final class DisplayGeometryTests: XCTestCase {
         ]
         CVBufferSetAttachment(buffer, kCVImageBufferCleanApertureKey, aperture as CFDictionary, .shouldPropagate)
         XCTAssertEqual(DisplayGeometry.visibleRect(of: buffer), CGRect(x: 0, y: 0, width: 1920, height: 1080))
+    }
+
+    func testMacroblockPaddingHeuristic() {
+        XCTAssertEqual(DisplayGeometry.paddedHeight(width: 1920, height: 1088), 1080)
+        XCTAssertEqual(DisplayGeometry.paddedHeight(width: 960, height: 544), 540)
+        XCTAssertNil(DisplayGeometry.paddedHeight(width: 1440, height: 1088))   // not 16:9: leave alone
+        XCTAssertNil(DisplayGeometry.paddedHeight(width: 1920, height: 1080))
+        XCTAssertNil(DisplayGeometry.paddedHeight(width: 1280, height: 720))
+    }
+
+    func testExplicitCleanApertureWinsOverHeuristic() {
+        let fullClap: [String: Any] = [
+            kCVImageBufferCleanApertureWidthKey as String: 1920,
+            kCVImageBufferCleanApertureHeightKey as String: 1088,
+        ]
+        XCTAssertEqual(DisplayGeometry.visibleRect(width: 1920, height: 1088, cleanAperture: fullClap),
+                       CGRect(x: 0, y: 0, width: 1920, height: 1088))
     }
 }

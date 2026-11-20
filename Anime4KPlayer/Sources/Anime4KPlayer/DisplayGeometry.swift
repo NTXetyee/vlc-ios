@@ -25,11 +25,29 @@ enum DisplayGeometry {
     /// Decoders often pad 1080p to 1088 rows; the padding must not be upscaled onto the screen.
     static func visibleRect(of pb: CVPixelBuffer) -> CGRect {
         let w = CGFloat(CVPixelBufferGetWidth(pb)), h = CGFloat(CVPixelBufferGetHeight(pb))
+        return visibleRect(width: w, height: h,
+                           cleanAperture: CVBufferCopyAttachment(pb, kCVImageBufferCleanApertureKey, nil) as? [String: Any])
+    }
+
+    /// H.264/HEVC code pictures in 16-row macroblocks, so 1080 and 540 line video arrives as
+    /// 1088 / 544 rows with the padding at the bottom. VLC knows the real height but doesn't
+    /// pass it on the pixel buffer, so without a clean aperture we recognise the 16:9 cases.
+    static func paddedHeight(width: CGFloat, height: CGFloat) -> CGFloat? {
+        for (coded, visible) in [(1088, 1080), (544, 540)] as [(CGFloat, CGFloat)] where height == coded {
+            if abs(width * 9 / 16 - visible) < 1 { return visible }
+        }
+        return nil
+    }
+
+    static func visibleRect(width w: CGFloat, height h: CGFloat, cleanAperture clap: [String: Any]?) -> CGRect {
         let full = CGRect(x: 0, y: 0, width: w, height: h)
+        guard let clap else {
+            if let visible = paddedHeight(width: w, height: h) { return CGRect(x: 0, y: 0, width: w, height: visible) }
+            return full
+        }
         // QuickTime 'clap' semantics: size plus the offset of its centre from the frame centre
         // (x right, y down).
-        guard let clap = CVBufferCopyAttachment(pb, kCVImageBufferCleanApertureKey, nil) as? [String: Any],
-              let cw = (clap[kCVImageBufferCleanApertureWidthKey as String] as? NSNumber)?.doubleValue,
+        guard let cw = (clap[kCVImageBufferCleanApertureWidthKey as String] as? NSNumber)?.doubleValue,
               let ch = (clap[kCVImageBufferCleanApertureHeightKey as String] as? NSNumber)?.doubleValue else { return full }
         let dx = (clap[kCVImageBufferCleanApertureHorizontalOffsetKey as String] as? NSNumber)?.doubleValue ?? 0
         let dy = (clap[kCVImageBufferCleanApertureVerticalOffsetKey as String] as? NSNumber)?.doubleValue ?? 0

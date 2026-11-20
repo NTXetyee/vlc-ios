@@ -43,8 +43,17 @@ final class UpscalePipeline {
     private var lastFormat: OSType = 0
 
     private struct ConfigKey: Equatable {
-        var model: UpscaleModel, mode: Anime4KMode, size: ModelSize
+        var model: UpscaleModel, mode: Anime4KMode, size: ModelSize, force: Bool
         var srcW: Int, srcH: Int, outW: Int, outH: Int
+
+        /// Output size the model is configured for. Anime4K only enables its ×2 networks when
+        /// the output is > 1.2× their input; with `force` we ask for at least 2× so the first
+        /// upscale runs (and only that one: at exactly 2× the pre-downscale and second ×2 stay
+        /// off), and the pipeline resamples the 2× result down to the real output.
+        var modelOutput: (w: Int, h: Int) {
+            let scale = min(Double(outW) / Double(srcW), Double(outH) / Double(srcH))
+            return force && scale < 2 ? (srcW * 2, srcH * 2) : (outW, outH)
+        }
     }
 
     /// Identity of a decoded picture. While paused, VLC redisplays the current picture by
@@ -102,8 +111,10 @@ final class UpscalePipeline {
         lock.unlock()
         if !new.enabled {
             releaseResources(reason: "disabled")
-        } else if old.model != new.model || old.mode != new.mode || old.size != new.size {
+        } else if old.model != new.model || old.mode != new.mode || old.size != new.size
+                    || old.forceUpscale != new.forceUpscale || !old.enabled {
             stats.resetCounters()
+            prewarm(new)
         }
     }
 
@@ -209,7 +220,7 @@ final class UpscalePipeline {
         var crop = SIMD4<Float>(Float(visible.minX) / Float(srcW), Float(visible.minY) / Float(srcH),
                                 Float(visible.width) / Float(srcW), Float(visible.height) / Float(srcH))
 
-        let key = ConfigKey(model: settings.model, mode: settings.mode, size: settings.size,
+        let key = ConfigKey(model: settings.model, mode: settings.mode, size: settings.size, force: settings.forceUpscale,
                             srcW: srcW, srcH: srcH, outW: outW, outH: outH)
 
         lock.lock()
@@ -457,15 +468,35 @@ final class UpscalePipeline {
         return sb
     }
 
+    /// Compile the shaders for `settings` ahead of the first frame (e.g. when the player opens
+    /// with upscaling already on). Runs on the build queue, so a build that follows reuses it.
+    func prewarm(_ settings: UpscaleSettings) {
+        guard settings.enabled else { return }
+        buildQueue.async { [device] in
+            let files: [String]
+            switch settings.model {
+            case .anime4k: files = Anime4KUpscaler.shaderFiles(mode: settings.mode, size: settings.size)
+            }
+            let t0 = CACurrentMediaTime()
+            let n = ShaderLibraryCache.shared.prewarm(files, device: device)
+            if n > 0 { a4kLog("prewarm: compiled \(n) shader files for \(settings.label) in \(Int((CACurrentMediaTime() - t0) * 1000)) ms") }
+        }
+    }
+
     /// Compile the model for `key` in the background; frames show the original until it's ready.
     private func build(key: ConfigKey, settings: UpscaleSettings) {
         buildQueue.async { [weak self] in
             guard let self else { return }
             let t0 = CACurrentMediaTime()
+            let cache = ShaderLibraryCache.shared
+            let (hits0, misses0) = (cache.hits, cache.misses)
             do {
                 let u = try UpscalerFactory.make(settings: settings, device: self.device)
-                try u.configure(sourceWidth: key.srcW, sourceHeight: key.srcH, outputWidth: key.outW, outputHeight: key.outH)
-                let ms = (CACurrentMediaTime() - t0) * 1000
+                let t1 = CACurrentMediaTime()
+                let target = key.modelOutput
+                try u.configure(sourceWidth: key.srcW, sourceHeight: key.srcH, outputWidth: target.w, outputHeight: target.h)
+                let t2 = CACurrentMediaTime()
+                let ms = (t2 - t0) * 1000
                 self.lock.lock()
                 if self.buildingKey == key {
                     self.upscaler = u
@@ -480,7 +511,10 @@ final class UpscalePipeline {
                     $0.sourceSize = "\(key.srcW)x\(key.srcH)"
                     $0.outputSize = "\(key.outW)x\(key.outH)"
                 }
-                a4kLog("built \(u.summary): \(u.activePassCount) passes, \(key.srcW)x\(key.srcH) -> \(key.outW)x\(key.outH) in \(Int(ms)) ms")
+                let forced = key.force ? " via model \(target.w)x\(target.h) (force ×2)" : ""
+                a4kLog("built \(u.summary): \(u.activePassCount) passes, \(key.srcW)x\(key.srcH) -> \(key.outW)x\(key.outH)\(forced)"
+                       + " in \(Int(ms)) ms (shaders \(Int((t1 - t0) * 1000)) ms: \(cache.misses - misses0) compiled,"
+                       + " \(cache.hits - hits0) cached · pipelines \(Int((t2 - t1) * 1000)) ms)")
             } catch {
                 self.lock.lock()
                 if self.buildingKey == key { self.buildingKey = nil; self.failedKey = key }

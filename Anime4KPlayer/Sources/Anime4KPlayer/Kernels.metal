@@ -34,6 +34,17 @@ kernel void ResizeFill(texture2d<float, access::sample> src [[texture(0)]],
 {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::bicubic);
-    float2 uv = crop.xy + (float2(gid) + 0.5) / float2(dst.get_width(), dst.get_height()) * crop.zw;
-    dst.write(saturate(src.sample(s, uv)), gid);
+    float2 dstSize = float2(dst.get_width(), dst.get_height());
+    float2 uv = crop.xy + (float2(gid) + 0.5) / dstSize * crop.zw;
+    // Source texels covered by one output pixel. When shrinking (e.g. a forced ×2 result down to
+    // the screen) a single bicubic tap aliases: average a 2×2 supersample instead.
+    float2 footprint = float2(src.get_width(), src.get_height()) * crop.zw / dstSize;
+    if (max(footprint.x, footprint.y) > 1.25) {
+        float2 q = 0.25 * crop.zw / dstSize;   // a quarter of an output pixel, in uv
+        float4 c = src.sample(s, uv + float2(-q.x, -q.y)) + src.sample(s, uv + float2(q.x, -q.y))
+                 + src.sample(s, uv + float2(-q.x, q.y)) + src.sample(s, uv + float2(q.x, q.y));
+        dst.write(saturate(c * 0.25), gid);
+    } else {
+        dst.write(saturate(src.sample(s, uv)), gid);
+    }
 }
