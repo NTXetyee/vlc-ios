@@ -26,6 +26,7 @@ final class UpscalePipeline {
     private let lock = NSLock()
     private var settings = UpscaleSettings()
     private var suspended = false
+    private var bypass = false
     private var upscaler: Upscaler?
     private var readyKey: ConfigKey?
     private var buildingKey: ConfigKey?
@@ -123,6 +124,12 @@ final class UpscalePipeline {
         }
     }
 
+    /// A/B compare: show original frames but keep the model and the paused-frame cache warm,
+    /// so switching back is instant (no rebuild, unlike turning upscaling off).
+    func setBypass(_ value: Bool) {
+        lock.lock(); bypass = value; lock.unlock()
+    }
+
     /// iOS forbids GPU work in the background: stop submitting and free memory.
     func setSuspended(_ value: Bool) {
         lock.lock(); suspended = value; lock.unlock()
@@ -180,6 +187,10 @@ final class UpscalePipeline {
         if endedStreak > 0 { reuseStreak = 0 }
         lock.unlock()
         if endedStreak > 0 { a4kLog("redisplay: same picture reused \(endedStreak)x, new picture arrived") }
+
+        // After the cache check above, so frames shown during A/B still invalidate it correctly.
+        lock.lock(); let bypassed = bypass; lock.unlock()
+        if bypassed { stats.passThrough("A/B original"); return false }
 
         let format = CVPixelBufferGetPixelFormatType(pixelBuffer)
         guard let input = InputFormat(format) else {

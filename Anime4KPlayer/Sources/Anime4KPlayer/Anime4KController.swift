@@ -44,12 +44,23 @@ import AVFoundation
         _settings = s
         lock.unlock()
         guard changed else { return }
+        if !s.enabled { DispatchQueue.main.async { self.setBypassed(false) } }
         s.save()
         pipeline?.apply(settings: s)
         a4kLog("settings: \(s.label)")
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: Self.settingsDidChange, object: self)
         }
+    }
+
+    /// A/B compare (not persisted): true shows the original video while upscaling stays ready.
+    public private(set) var isBypassed = false
+
+    public func setBypassed(_ value: Bool) {
+        guard value != isBypassed else { return }
+        isBypassed = value
+        pipeline?.setBypass(value)
+        a4kLog("A/B: showing \(value ? "original" : "upscaled")")
     }
 
     @objc public var isEnabled: Bool {

@@ -6,6 +6,8 @@ final class Anime4KControlView: UIView {
     private weak var controller: Anime4KController?
     private let button = UIButton(type: .system)
     private let pill: UIVisualEffectView
+    private let compareButton = UIButton(type: .system)
+    private let compareBox: UIVisualEffectView
     private let statsLabel = UILabel()
     private let statsBox: UIVisualEffectView
     private var timer: Timer?
@@ -14,7 +16,20 @@ final class Anime4KControlView: UIView {
         self.controller = controller
         pill = UIVisualEffectView(effect: Self.glass())
         statsBox = UIVisualEffectView(effect: Self.glass())
+        compareBox = UIVisualEffectView(effect: Self.glass())
         super.init(frame: .zero)
+
+        // One-tap A/B: original vs upscaled, without opening the menu.
+        compareBox.layer.cornerRadius = 18
+        compareBox.clipsToBounds = true
+        compareBox.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(compareBox)
+        compareButton.translatesAutoresizingMaskIntoConstraints = false
+        compareButton.titleLabel?.font = .monospacedSystemFont(ofSize: 13, weight: .bold)
+        compareButton.contentEdgeInsets = UIEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        compareButton.accessibilityLabel = "Compare with original"
+        compareButton.addTarget(self, action: #selector(compareTapped), for: .touchUpInside)
+        compareBox.contentView.addSubview(compareButton)
 
         pill.layer.cornerRadius = 18
         pill.clipsToBounds = true
@@ -41,7 +56,13 @@ final class Anime4KControlView: UIView {
         NSLayoutConstraint.activate([
             pill.topAnchor.constraint(equalTo: topAnchor),
             pill.trailingAnchor.constraint(equalTo: trailingAnchor),
-            pill.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor),
+            compareBox.trailingAnchor.constraint(equalTo: pill.leadingAnchor, constant: -8),
+            compareBox.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            compareBox.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor),
+            compareButton.topAnchor.constraint(equalTo: compareBox.contentView.topAnchor),
+            compareButton.bottomAnchor.constraint(equalTo: compareBox.contentView.bottomAnchor),
+            compareButton.leadingAnchor.constraint(equalTo: compareBox.contentView.leadingAnchor),
+            compareButton.trailingAnchor.constraint(equalTo: compareBox.contentView.trailingAnchor),
             button.topAnchor.constraint(equalTo: pill.contentView.topAnchor),
             button.bottomAnchor.constraint(equalTo: pill.contentView.bottomAnchor),
             button.leadingAnchor.constraint(equalTo: pill.contentView.leadingAnchor),
@@ -80,7 +101,8 @@ final class Anime4KControlView: UIView {
     // Let touches outside the pill (e.g. on the stats box) reach the player underneath.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
-        return hit?.isDescendant(of: pill) == true ? hit : nil
+        guard let hit else { return nil }
+        return hit.isDescendant(of: pill) || hit.isDescendant(of: compareBox) ? hit : nil
     }
 
     private static func glass() -> UIVisualEffect {
@@ -104,7 +126,23 @@ final class Anime4KControlView: UIView {
         button.setTitle(title, for: .normal)
         button.menu = makeMenu(s)
         statsBox.isHidden = !(s.enabled && s.showStats)
+        compareBox.isHidden = !s.enabled
+        updateCompareButton()
         refreshStats()
+    }
+
+    private func updateCompareButton() {
+        let original = controller?.isBypassed ?? false
+        compareButton.setTitle(original ? "ORIG" : "A4K", for: .normal)
+        compareButton.tintColor = original ? UIColor.white.withAlphaComponent(0.55) : .white
+        compareBox.alpha = original ? 0.8 : 1
+    }
+
+    @objc private func compareTapped() {
+        guard let controller else { return }
+        controller.setBypassed(!controller.isBypassed)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        updateCompareButton()
     }
 
     private func refreshStats() {
