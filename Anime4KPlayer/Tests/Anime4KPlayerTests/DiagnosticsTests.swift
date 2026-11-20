@@ -22,16 +22,22 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     func testSettingsFromOlderBuildsStillLoad() throws {
-        // Saved before forceUpscale existed.
+        // Saved before the upscale path existed.
         let old = #"{"enabled":true,"model":"anime4k","mode":"A+A","size":"L","showStats":false}"#
         let s = try JSONDecoder().decode(UpscaleSettings.self, from: Data(old.utf8))
         XCTAssertTrue(s.enabled)
         XCTAssertEqual(s.mode, .aa)
         XCTAssertEqual(s.size, .l)
         XCTAssertFalse(s.showStats)
-        XCTAssertFalse(s.forceUpscale)
-        var round = s; round.forceUpscale = true
+        XCTAssertEqual(s.path, .auto)
+        var round = s; round.path = .half2x
         let back = try JSONDecoder().decode(UpscaleSettings.self, from: JSONEncoder().encode(round))
         XCTAssertEqual(back, round)
+    }
+
+    func testLegacyForceFlagMapsToFullRes() throws {
+        let saved = #"{"enabled":true,"model":"anime4k","mode":"A","size":"M","showStats":true,"forceUpscale":true}"#
+        let s = try JSONDecoder().decode(UpscaleSettings.self, from: Data(saved.utf8))
+        XCTAssertEqual(s.path, .full2x)
     }
 }

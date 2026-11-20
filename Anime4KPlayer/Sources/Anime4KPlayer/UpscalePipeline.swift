@@ -34,8 +34,8 @@ final class UpscalePipeline {
     private var generation = 0
     private var outputPool: CVPixelBufferPool?
     private var outputPoolSize = (0, 0)
-    private var sourceTextures: [MTLTexture] = []
-    private var sourceSlot = 0
+    private var sourceTextures = TextureRing()
+    private var prescaleTextures = TextureRing()
     private var loggedFormats = Set<OSType>()
     private var lastFrame: LastFrame?
     private var reuseStreak = 0
@@ -43,16 +43,21 @@ final class UpscalePipeline {
     private var lastFormat: OSType = 0
 
     private struct ConfigKey: Equatable {
-        var model: UpscaleModel, mode: Anime4KMode, size: ModelSize, force: Bool
+        var model: UpscaleModel, mode: Anime4KMode, size: ModelSize, path: UpscalePath
         var srcW: Int, srcH: Int, outW: Int, outH: Int
+        /// What the model is fed: the whole decoded frame, or (half-res path) the visible area
+        /// shrunk to half the output size.
+        var modelInW: Int, modelInH: Int
+        var prescaled: Bool { modelInW != srcW || modelInH != srcH }
 
         /// Output size the model is configured for. Anime4K only enables its ×2 networks when
-        /// the output is > 1.2× their input; with `force` we ask for at least 2× so the first
+        /// the output is > 1.2× their input; the ×2 paths ask for at least 2× so the first
         /// upscale runs (and only that one: at exactly 2× the pre-downscale and second ×2 stay
-        /// off), and the pipeline resamples the 2× result down to the real output.
+        /// off), and the pipeline resamples the 2× result to the real output.
         var modelOutput: (w: Int, h: Int) {
-            let scale = min(Double(outW) / Double(srcW), Double(outH) / Double(srcH))
-            return force && scale < 2 ? (srcW * 2, srcH * 2) : (outW, outH)
+            guard path != .auto else { return (outW, outH) }
+            let scale = min(Double(outW) / Double(modelInW), Double(outH) / Double(modelInH))
+            return scale < 2 ? (modelInW * 2, modelInH * 2) : (outW, outH)
         }
     }
 
@@ -112,7 +117,7 @@ final class UpscalePipeline {
         if !new.enabled {
             releaseResources(reason: "disabled")
         } else if old.model != new.model || old.mode != new.mode || old.size != new.size
-                    || old.forceUpscale != new.forceUpscale || !old.enabled {
+                    || old.path != new.path || !old.enabled {
             stats.resetCounters()
             prewarm(new)
         }
@@ -138,7 +143,8 @@ final class UpscalePipeline {
         failedKey = nil
         outputPool = nil
         outputPoolSize = (0, 0)
-        sourceTextures = []
+        sourceTextures = TextureRing()
+        prescaleTextures = TextureRing()
         lastFrame = nil
         generation &+= 1
         lock.unlock()
@@ -217,11 +223,16 @@ final class UpscalePipeline {
             return false
         }
         // Normalized crop of the visible area; the model upscales uniformly, so it applies to its output too.
-        var crop = SIMD4<Float>(Float(visible.minX) / Float(srcW), Float(visible.minY) / Float(srcH),
-                                Float(visible.width) / Float(srcW), Float(visible.height) / Float(srcH))
-
-        let key = ConfigKey(model: settings.model, mode: settings.mode, size: settings.size, force: settings.forceUpscale,
-                            srcW: srcW, srcH: srcH, outW: outW, outH: outH)
+        let visibleCrop = SIMD4<Float>(Float(visible.minX) / Float(srcW), Float(visible.minY) / Float(srcH),
+                                       Float(visible.width) / Float(srcW), Float(visible.height) / Float(srcH))
+        let half = settings.path == .half2x
+            ? DisplayGeometry.halfResInput(outW: outW, outH: outH, visibleW: Int(visible.width), visibleH: Int(visible.height))
+            : nil
+        let key = ConfigKey(model: settings.model, mode: settings.mode, size: settings.size, path: settings.path,
+                            srcW: srcW, srcH: srcH, outW: outW, outH: outH,
+                            modelInW: half?.w ?? srcW, modelInH: half?.h ?? srcH)
+        // The prescale pass already cropped, so the final resize then takes the whole model output.
+        var crop = key.prescaled ? SIMD4<Float>(0, 0, 1, 1) : visibleCrop
 
         lock.lock()
         // Redisplay of the picture we just upscaled (paused, subtitle/OSD change): reuse the output.
@@ -257,7 +268,9 @@ final class UpscalePipeline {
         let gen = generation
         lastFrame = LastFrame(id: frameID, key: key, generation: gen, output: nil)
         let pool = reuseOrMakeOutputPool(width: outW, height: outH)
-        let sourceTex: MTLTexture? = input.needsIngest ? nextSourceTexture(width: srcW, height: srcH) : nil
+        let sourceTex: MTLTexture? = input.needsIngest ? sourceTextures.next(device, width: srcW, height: srcH, count: maxInFlight) : nil
+        let prescaleTex: MTLTexture? = key.prescaled
+            ? prescaleTextures.next(device, width: key.modelInW, height: key.modelInH, count: maxInFlight) : nil
         lock.unlock()
 
         func bail(_ reason: String) -> Bool {
@@ -271,7 +284,7 @@ final class UpscalePipeline {
 
         // Zero-copy views of the decoder's planes.
         var keepAlive: [CVMetalTexture] = []
-        let modelInput: MTLTexture
+        var modelInput: MTLTexture
         var params: YCbCrParams?
         var ingest: (luma: MTLTexture, chroma: MTLTexture)?
         switch input {
@@ -311,6 +324,19 @@ final class UpscalePipeline {
                 enc.setBytes(&p, length: MemoryLayout<YCbCrParams>.stride, index: 0)
                 dispatch(enc, ingestPSO, modelInput)
                 enc.endEncoding()
+            }
+            if key.prescaled {
+                // Half-res path: visible area -> half the output size (2×2 supersampled), then the model.
+                guard let small = prescaleTex, let enc = cmd.makeComputeCommandEncoder() else { return bail("texture") }
+                enc.label = "Prescale to half output"
+                enc.setComputePipelineState(resizePSO)
+                enc.setTexture(modelInput, index: 0)
+                enc.setTexture(small, index: 1)
+                var vc = visibleCrop
+                enc.setBytes(&vc, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+                dispatch(enc, resizePSO, small)
+                enc.endEncoding()
+                modelInput = small
             }
             let upscaled = try upscaler.encode(source: modelInput, commandBuffer: cmd)
             guard let enc = cmd.makeComputeCommandEncoder() else { return bail("encoder") }
@@ -435,20 +461,6 @@ final class UpscalePipeline {
         return pool
     }
 
-    /// Caller holds `lock`. Ring of RGB textures the ingest pass writes (one per in-flight frame).
-    private func nextSourceTexture(width: Int, height: Int) -> MTLTexture? {
-        if sourceTextures.first.map({ $0.width != width || $0.height != height }) ?? true {
-            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
-            d.usage = [.shaderRead, .shaderWrite]
-            d.storageMode = .private
-            sourceTextures = (0..<maxInFlight).compactMap { _ in device.makeTexture(descriptor: d) }
-            sourceSlot = 0
-        }
-        guard !sourceTextures.isEmpty else { return nil }
-        sourceSlot = (sourceSlot + 1) % sourceTextures.count
-        return sourceTextures[sourceSlot]
-    }
-
     private func dispatch(_ enc: MTLComputeCommandEncoder, _ pso: MTLComputePipelineState, _ target: MTLTexture) {
         let w = pso.threadExecutionWidth
         let h = max(1, pso.maxTotalThreadsPerThreadgroup / w)
@@ -494,7 +506,7 @@ final class UpscalePipeline {
                 let u = try UpscalerFactory.make(settings: settings, device: self.device)
                 let t1 = CACurrentMediaTime()
                 let target = key.modelOutput
-                try u.configure(sourceWidth: key.srcW, sourceHeight: key.srcH, outputWidth: target.w, outputHeight: target.h)
+                try u.configure(sourceWidth: key.modelInW, sourceHeight: key.modelInH, outputWidth: target.w, outputHeight: target.h)
                 let t2 = CACurrentMediaTime()
                 let ms = (t2 - t0) * 1000
                 self.lock.lock()
@@ -508,11 +520,12 @@ final class UpscalePipeline {
                     $0.engine = u.summary
                     $0.passes = u.activePassCount
                     $0.lastBuildMs = ms
-                    $0.sourceSize = "\(key.srcW)x\(key.srcH)"
+                    $0.sourceSize = key.prescaled ? "\(key.srcW)x\(key.srcH) ▸ \(key.modelInW)x\(key.modelInH)" : "\(key.srcW)x\(key.srcH)"
                     $0.outputSize = "\(key.outW)x\(key.outH)"
                 }
-                let forced = key.force ? " via model \(target.w)x\(target.h) (force ×2)" : ""
-                a4kLog("built \(u.summary): \(u.activePassCount) passes, \(key.srcW)x\(key.srcH) -> \(key.outW)x\(key.outH)\(forced)"
+                let route = key.path == .auto ? ""
+                    : " via model \(key.modelInW)x\(key.modelInH) -> \(target.w)x\(target.h) (\(key.path.displayName))"
+                a4kLog("built \(u.summary): \(u.activePassCount) passes, \(key.srcW)x\(key.srcH) -> \(key.outW)x\(key.outH)\(route)"
                        + " in \(Int(ms)) ms (shaders \(Int((t1 - t0) * 1000)) ms: \(cache.misses - misses0) compiled,"
                        + " \(cache.hits - hits0) cached · pipelines \(Int((t2 - t1) * 1000)) ms)")
             } catch {
@@ -522,5 +535,25 @@ final class UpscalePipeline {
                 a4kLog("build failed for \(settings.label): \(error.localizedDescription)")
             }
         }
+    }
+}
+
+/// A few same-sized private textures used round-robin, one per frame in flight.
+/// Not thread-safe: callers hold the pipeline lock.
+struct TextureRing {
+    private var textures: [MTLTexture] = []
+    private var slot = 0
+
+    mutating func next(_ device: MTLDevice, width: Int, height: Int, count: Int) -> MTLTexture? {
+        if textures.first.map({ $0.width != width || $0.height != height }) ?? true {
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
+            d.usage = [.shaderRead, .shaderWrite]
+            d.storageMode = .private
+            textures = (0..<count).compactMap { _ in device.makeTexture(descriptor: d) }
+            slot = 0
+        }
+        guard !textures.isEmpty else { return nil }
+        slot = (slot + 1) % textures.count
+        return textures[slot]
     }
 }

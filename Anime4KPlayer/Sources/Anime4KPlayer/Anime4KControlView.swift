@@ -93,14 +93,14 @@ final class Anime4KControlView: UIView {
     @objc private func settingsChanged() {
         refresh()
         if let s = controller?.settings {
-            showToast(s.enabled ? "Anime4K on · \(s.mode.displayName) (\(s.size.rawValue))\(s.forceUpscale ? " · force ×2" : "")" : "Anime4K off")
+            showToast(s.enabled ? "Anime4K on · \(s.mode.displayName) (\(s.size.rawValue))\(s.path == .auto ? "" : " · " + s.path.displayName)" : "Anime4K off")
         }
     }
 
     private func refresh() {
         guard let controller else { return }
         let s = controller.settings
-        let title = s.enabled ? "✦ \(s.mode.rawValue) · \(s.size.rawValue)\(s.forceUpscale ? " · ×2" : "")" : "✦ Off"
+        let title = s.enabled ? "✦ \(s.mode.rawValue) · \(s.size.rawValue)\(s.path.tag.isEmpty ? "" : " · " + s.path.tag)" : "✦ Off"
         button.setTitle(title, for: .normal)
         button.menu = makeMenu(s)
         statsBox.isHidden = !(s.enabled && s.showStats)
@@ -128,11 +128,13 @@ final class Anime4KControlView: UIView {
                 c?.update { $0.size = z; $0.enabled = true }
             }
         })
-        let force = UIAction(title: "Force ×2 Upscale", subtitle: "Run the upscale network even below 1.2×",
-                             image: UIImage(systemName: "arrow.up.left.and.arrow.down.right"),
-                             state: s.forceUpscale ? .on : .off) { _ in
-            c?.update { $0.forceUpscale.toggle(); $0.enabled = true }
-        }
+        let paths = UIMenu(title: "Upscale Path", subtitle: s.path.displayName,
+                           image: UIImage(systemName: "arrow.up.left.and.arrow.down.right"),
+                           children: UpscalePath.allCases.map { p in
+            UIAction(title: p.displayName, subtitle: p.detail, state: s.path == p ? .on : .off) { _ in
+                c?.update { $0.path = p; $0.enabled = true }
+            }
+        })
                 let models = UIMenu(title: "Model", image: UIImage(systemName: "square.stack.3d.up"), children: UpscaleModel.allCases.map { m in
             UIAction(title: m.displayName, state: s.model == m ? .on : .off) { _ in
                 c?.update { $0.model = m }
@@ -155,7 +157,7 @@ final class Anime4KControlView: UIView {
         }
         let log = UIMenu(title: "Log", image: UIImage(systemName: "list.bullet.rectangle"),
                          children: [marker, shareLog, copyLog])
-        return UIMenu(title: "Anime4K", children: [toggle, modes, sizes, models, force,
+        return UIMenu(title: "Anime4K", children: [toggle, modes, sizes, models, paths,
                                                    UIMenu(options: .displayInline, children: [stats, log])])
     }
 

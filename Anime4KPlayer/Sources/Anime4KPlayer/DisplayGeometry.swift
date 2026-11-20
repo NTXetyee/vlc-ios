@@ -73,4 +73,11 @@ enum DisplayGeometry {
         let s = min(bounds.width / dispW, bounds.height / dispH)
         return (Int((dispW * s).rounded()), Int((dispH * s).rounded()))
     }
+
+    /// Half-res path: model input size for an `out`-sized output (rounded up so 2× covers it),
+    /// or nil when that wouldn't be smaller than the visible area (screen already ≥ 2× the video).
+    static func halfResInput(outW: Int, outH: Int, visibleW: Int, visibleH: Int) -> (w: Int, h: Int)? {
+        let w = (outW + 1) / 2, h = (outH + 1) / 2
+        return w < visibleW && h < visibleH ? (w, h) : nil
+    }
 }

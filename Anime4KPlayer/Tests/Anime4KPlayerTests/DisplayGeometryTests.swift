@@ -68,4 +68,13 @@ final class DisplayGeometryTests: XCTestCase {
         XCTAssertEqual(DisplayGeometry.visibleRect(width: 1920, height: 1088, cleanAperture: fullClap),
                        CGRect(x: 0, y: 0, width: 1920, height: 1088))
     }
+
+    func testHalfResInput() {
+        // 1080p full screen on an iPad mini: 2265x1274 out -> 1133x637 in, ×2 = 2266x1274.
+        let r = DisplayGeometry.halfResInput(outW: 2265, outH: 1274, visibleW: 1920, visibleH: 1080)
+        XCTAssertEqual(r?.w, 1133)
+        XCTAssertEqual(r?.h, 637)
+        // 720p on a 4K display: already ≥ 2×, nothing to shrink.
+        XCTAssertNil(DisplayGeometry.halfResInput(outW: 3840, outH: 2160, visibleW: 1280, visibleH: 720))
+    }
 }
