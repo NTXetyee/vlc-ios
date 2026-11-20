@@ -106,10 +106,11 @@ final class UpscalePipeline {
     // MARK: - Per frame
 
     /// - Parameters:
-    ///   - displayPixelSize: size of the video's on-screen rect in pixels.
+    ///   - layerPixelSize: bounds of the display layer in screen pixels. The video is
+    ///     aspect-fitted inside it (letterboxed), so this is not the video's own size.
     ///   - enqueue: called later (Metal completion thread) with the upscaled sample buffer.
     /// - Returns: false if the caller must show the original frame now.
-    func process(_ sampleBuffer: CMSampleBuffer, displayPixelSize: CGSize,
+    func process(_ sampleBuffer: CMSampleBuffer, layerPixelSize: CGSize,
                  enqueue: @escaping (CMSampleBuffer) -> Void) -> Bool {
         lock.lock()
         let settings = self.settings
@@ -137,10 +138,23 @@ final class UpscalePipeline {
         }
 
         let srcW = CVPixelBufferGetWidth(pixelBuffer), srcH = CVPixelBufferGetHeight(pixelBuffer)
-        let outW = min(4096, Int(displayPixelSize.width.rounded()))
-        let outH = min(4096, Int(displayPixelSize.height.rounded()))
+        // Output = the on-screen video rect (aspect-fitted, padding cropped), capped at 4096.
+        let visible = DisplayGeometry.visibleRect(of: pixelBuffer)
+        let fitted = DisplayGeometry.aspectFit(visible: visible.size,
+                                               pixelAspect: DisplayGeometry.pixelAspectRatio(of: pixelBuffer),
+                                               into: layerPixelSize)
+        let cap = min(1, 4096 / CGFloat(max(fitted.width, fitted.height, 1)))
+        let outW = Int((CGFloat(fitted.width) * cap).rounded())
+        let outH = Int((CGFloat(fitted.height) * cap).rounded())
         // Nothing to gain when the video is shown at (or below) its native size, e.g. PiP or a small window.
-        guard outW > srcW || outH > srcH else { stats.passThrough("no upscale"); return false }
+        guard outW > Int(visible.width) || outH > Int(visible.height) else {
+            stats.passThrough("no upscale")
+            stats.update { $0.sourceSize = "\(Int(visible.width))x\(Int(visible.height))"; $0.outputSize = "\(outW)x\(outH)" }
+            return false
+        }
+        // Normalized crop of the visible area; the model upscales uniformly, so it applies to its output too.
+        var crop = SIMD4<Float>(Float(visible.minX) / Float(srcW), Float(visible.minY) / Float(srcH),
+                                Float(visible.width) / Float(srcW), Float(visible.height) / Float(srcH))
 
         let key = ConfigKey(model: settings.model, mode: settings.mode, size: settings.size,
                             srcW: srcW, srcH: srcH, outW: outW, outH: outH)
@@ -217,6 +231,7 @@ final class UpscalePipeline {
             enc.setComputePipelineState(resizePSO)
             enc.setTexture(upscaled, index: 0)
             enc.setTexture(outTex, index: 1)
+            enc.setBytes(&crop, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
             dispatch(enc, resizePSO, outTex)
             enc.endEncoding()
         } catch {

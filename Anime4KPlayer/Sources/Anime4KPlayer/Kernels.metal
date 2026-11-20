@@ -24,14 +24,16 @@ kernel void IngestBiPlanar(texture2d<float, access::read>   lumaTex   [[texture(
     outTex.write(float4(saturate(rgb), 1.0), gid);
 }
 
-// Resample the model output to exactly the output buffer size (the output buffer already has
-// the on-screen aspect ratio, including non-square source pixels), bicubic.
+// Resample the visible part (`crop`: normalized x, y, w, h; drops decoder padding such as
+// 1080p coded as 1088 rows) of the model output to exactly the output buffer size (the output
+// buffer already has the on-screen aspect ratio, including non-square source pixels), bicubic.
 kernel void ResizeFill(texture2d<float, access::sample> src [[texture(0)]],
                        texture2d<float, access::write>  dst [[texture(1)]],
+                       constant float4 &crop                [[buffer(0)]],
                        uint2 gid                            [[thread_position_in_grid]])
 {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::bicubic);
-    float2 uv = (float2(gid) + 0.5) / float2(dst.get_width(), dst.get_height());
+    float2 uv = crop.xy + (float2(gid) + 0.5) / float2(dst.get_width(), dst.get_height()) * crop.zw;
     dst.write(saturate(src.sample(s, uv)), gid);
 }

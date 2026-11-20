@@ -64,9 +64,9 @@ import AVFoundation
         SampleBufferHook.install(
             onFrame: { layer, sampleBuffer in
                 let size = layer.bounds.size
-                let scale = max(layer.contentsScale, 1)
+                let scale = DisplayGeometry.pixelScale(of: layer)
                 let px = CGSize(width: size.width * scale, height: size.height * scale)
-                return pipeline.process(sampleBuffer, displayPixelSize: px) { upscaled in
+                return pipeline.process(sampleBuffer, layerPixelSize: px) { upscaled in
                     SampleBufferHook.enqueueOriginal(layer, upscaled)
                 }
             },
