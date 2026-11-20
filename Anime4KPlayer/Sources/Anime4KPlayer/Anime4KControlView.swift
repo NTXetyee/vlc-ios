@@ -137,11 +137,33 @@ final class Anime4KControlView: UIView {
                              state: s.showStats ? .on : .off) { _ in
             c?.update { $0.showStats.toggle() }
         }
-        let copyLog = UIAction(title: "Copy Log", image: UIImage(systemName: "doc.on.doc")) { _ in
-            UIPasteboard.general.string = c?.exportLog()
+        let marker = UIAction(title: "Add Log Marker", image: UIImage(systemName: "flag")) { [weak self] _ in
+            guard let n = c?.addMarker() else { return }
+            self?.showToast("Marker \(n) added to log")
         }
+        let shareLog = UIAction(title: "Share Log…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            self?.shareLog()
+        }
+        let copyLog = UIAction(title: "Copy Log", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+            UIPasteboard.general.string = c?.exportReport()
+            self?.showToast("Log copied")
+        }
+        let log = UIMenu(title: "Log", image: UIImage(systemName: "list.bullet.rectangle"),
+                         children: [marker, shareLog, copyLog])
         return UIMenu(title: "Anime4K", children: [toggle, modes, sizes, models,
-                                                   UIMenu(options: .displayInline, children: [stats, copyLog])])
+                                                   UIMenu(options: .displayInline, children: [stats, log])])
+    }
+
+    /// Share sheet with the report as a .txt file (AirDrop, Notes, Files, Messages…).
+    private func shareLog() {
+        guard let url = controller?.exportReportFile(), var top = window?.rootViewController else {
+            showToast("Couldn't write log file"); return
+        }
+        while let presented = top.presentedViewController { top = presented }
+        let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        sheet.popoverPresentationController?.sourceView = pill   // required on iPad
+        sheet.popoverPresentationController?.sourceRect = pill.bounds
+        top.present(sheet, animated: true)
     }
 
     private static func sizeHint(_ z: ModelSize) -> String {

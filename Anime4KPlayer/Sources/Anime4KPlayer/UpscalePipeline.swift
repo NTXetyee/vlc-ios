@@ -20,6 +20,7 @@ final class UpscalePipeline {
     private let resizePSO: MTLComputePipelineState
     private let buildQueue = DispatchQueue(label: "Anime4KPlayer.build", qos: .userInitiated)
     private let maxInFlight = Anime4K.bufferCount
+    var deviceName: String { device.name }
 
     // State below is guarded by `lock`.
     private let lock = NSLock()
@@ -37,6 +38,8 @@ final class UpscalePipeline {
     private var sourceSlot = 0
     private var loggedFormats = Set<OSType>()
     private var lastFrame: LastFrame?
+    private var reuseStreak = 0
+    private var lastGeometry = ""   // vout thread only
     private var lastFormat: OSType = 0
 
     private struct ConfigKey: Equatable {
@@ -113,6 +116,7 @@ final class UpscalePipeline {
     /// Drop frames still in flight (seek / flush on the display layer).
     func flush() {
         lock.lock(); generation &+= 1; lastFrame = nil; lock.unlock()
+        stats.update { $0.flushes += 1 }
     }
 
     func releaseResources(reason: String) {
@@ -149,12 +153,16 @@ final class UpscalePipeline {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             stats.passThrough("no image"); return false
         }
+        stats.frameSeen()
         // Only the immediately preceding picture may be reused: any other frame, whatever path it
         // takes below, invalidates the cache (its decoder buffer may be recycled later).
         let frameID = FrameID(pixelBuffer)
         lock.lock()
         if lastFrame?.id != frameID { lastFrame = nil }
+        let endedStreak = lastFrame == nil ? reuseStreak : 0
+        if endedStreak > 0 { reuseStreak = 0 }
         lock.unlock()
+        if endedStreak > 0 { a4kLog("redisplay: same picture reused \(endedStreak)x, new picture arrived") }
 
         let format = CVPixelBufferGetPixelFormatType(pixelBuffer)
         guard let input = InputFormat(format) else {
@@ -181,6 +189,16 @@ final class UpscalePipeline {
         let cap = min(1, 4096 / CGFloat(max(fitted.width, fitted.height, 1)))
         let outW = Int((CGFloat(fitted.width) * cap).rounded())
         let outH = Int((CGFloat(fitted.height) * cap).rounded())
+        let par = DisplayGeometry.pixelAspectRatio(of: pixelBuffer)
+        let geometry = "layer \(Int(layerPixelSize.width))x\(Int(layerPixelSize.height)) px · src \(srcW)x\(srcH)"
+            + " · visible \(Int(visible.minX)),\(Int(visible.minY)) \(Int(visible.width))x\(Int(visible.height))"
+            + " · PAR \(String(format: "%.3f", par)) · out \(outW)x\(outH)"
+            + " (\(String(format: "%.2f", Double(outW) / Double(max(1, Int(visible.width)))))x)"
+        if geometry != lastGeometry {
+            lastGeometry = geometry
+            stats.update { $0.geometry = geometry }
+            a4kLog("geometry: " + geometry)
+        }
         // Nothing to gain when the video is shown at (or below) its native size, e.g. PiP or a small window.
         guard outW > Int(visible.width) || outH > Int(visible.height) else {
             stats.passThrough("no upscale")
@@ -198,7 +216,10 @@ final class UpscalePipeline {
         // Redisplay of the picture we just upscaled (paused, subtitle/OSD change): reuse the output.
         if let last = lastFrame, last.id == frameID, last.key == key, last.generation == generation {
             let cached = last.output
+            reuseStreak += 1
+            let firstReuse = reuseStreak == 1
             lock.unlock()
+            if firstReuse { a4kLog("redisplay: same picture re-enqueued (paused?), reusing upscaled output") }
             guard let cached else {
                 // Its GPU work is still in flight and will be enqueued when done; skip this copy.
                 stats.reused(); return true
