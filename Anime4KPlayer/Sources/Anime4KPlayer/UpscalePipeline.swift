@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import CoreMedia
 import CoreVideo
+import IOSurface
 import QuartzCore
 import Anime4KMetalCore
 
@@ -35,11 +36,37 @@ final class UpscalePipeline {
     private var sourceTextures: [MTLTexture] = []
     private var sourceSlot = 0
     private var loggedFormats = Set<OSType>()
+    private var lastFrame: LastFrame?
     private var lastFormat: OSType = 0
 
     private struct ConfigKey: Equatable {
         var model: UpscaleModel, mode: Anime4KMode, size: ModelSize
         var srcW: Int, srcH: Int, outW: Int, outH: Int
+    }
+
+    /// Identity of a decoded picture. While paused, VLC redisplays the current picture by
+    /// enqueueing the same CVPixelBuffer again with a new timestamp (RenderPicture in
+    /// VLCSampleBufferDisplay.m). A decoder buffer can't come back as the very next frame with
+    /// new content (VLC holds the displayed picture until its successor is shown), so "same
+    /// buffer as the previous frame" means "same picture". The IOSurface seed is a cheap extra
+    /// guard against in-place rewrites.
+    private struct FrameID: Equatable {
+        var buffer: UnsafeMutableRawPointer, surface: IOSurfaceID, seed: UInt32
+
+        init(_ pb: CVPixelBuffer) {
+            buffer = Unmanaged.passUnretained(pb).toOpaque()
+            if let io = CVPixelBufferGetIOSurface(pb)?.takeUnretainedValue() {
+                surface = IOSurfaceGetID(io); seed = IOSurfaceGetSeed(io)
+            } else {
+                surface = 0; seed = 0
+            }
+        }
+    }
+
+    /// The last picture sent to the model and, once the GPU finishes, its upscaled output.
+    private struct LastFrame {
+        var id: FrameID, key: ConfigKey, generation: Int
+        var output: CVPixelBuffer?
     }
 
     init?() {
@@ -85,7 +112,7 @@ final class UpscalePipeline {
 
     /// Drop frames still in flight (seek / flush on the display layer).
     func flush() {
-        lock.lock(); generation &+= 1; lock.unlock()
+        lock.lock(); generation &+= 1; lastFrame = nil; lock.unlock()
     }
 
     func releaseResources(reason: String) {
@@ -97,6 +124,7 @@ final class UpscalePipeline {
         outputPool = nil
         outputPoolSize = (0, 0)
         sourceTextures = []
+        lastFrame = nil
         generation &+= 1
         lock.unlock()
         CVMetalTextureCacheFlush(textureCache, 0)
@@ -121,6 +149,13 @@ final class UpscalePipeline {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             stats.passThrough("no image"); return false
         }
+        // Only the immediately preceding picture may be reused: any other frame, whatever path it
+        // takes below, invalidates the cache (its decoder buffer may be recycled later).
+        let frameID = FrameID(pixelBuffer)
+        lock.lock()
+        if lastFrame?.id != frameID { lastFrame = nil }
+        lock.unlock()
+
         let format = CVPixelBufferGetPixelFormatType(pixelBuffer)
         guard let input = InputFormat(format) else {
             noteUnsupported(format, pixelBuffer)
@@ -160,6 +195,22 @@ final class UpscalePipeline {
                             srcW: srcW, srcH: srcH, outW: outW, outH: outH)
 
         lock.lock()
+        // Redisplay of the picture we just upscaled (paused, subtitle/OSD change): reuse the output.
+        if let last = lastFrame, last.id == frameID, last.key == key, last.generation == generation {
+            let cached = last.output
+            lock.unlock()
+            guard let cached else {
+                // Its GPU work is still in flight and will be enqueued when done; skip this copy.
+                stats.reused(); return true
+            }
+            let pts = CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer)
+            guard let out = Self.sampleBuffer(with: cached, timing: pts) else {
+                stats.passThrough("output buffer"); return false
+            }
+            stats.reused()
+            enqueue(out)
+            return true
+        }
         guard let upscaler = self.upscaler, readyKey == key else {
             let shouldBuild = buildingKey != key && failedKey != key
             if shouldBuild { buildingKey = key }
@@ -172,12 +223,16 @@ final class UpscalePipeline {
         }
         inFlight += 1
         let gen = generation
+        lastFrame = LastFrame(id: frameID, key: key, generation: gen, output: nil)
         let pool = reuseOrMakeOutputPool(width: outW, height: outH)
         let sourceTex: MTLTexture? = input.needsIngest ? nextSourceTexture(width: srcW, height: srcH) : nil
         lock.unlock()
 
         func bail(_ reason: String) -> Bool {
-            lock.lock(); inFlight -= 1; lock.unlock()
+            lock.lock()
+            inFlight -= 1
+            if lastFrame?.id == frameID { lastFrame = nil }
+            lock.unlock()
             stats.passThrough(reason)
             return false
         }
@@ -246,6 +301,9 @@ final class UpscalePipeline {
             self.lock.lock()
             self.inFlight -= 1
             let stale = gen != self.generation
+            if !stale, self.lastFrame?.id == frameID, self.lastFrame?.generation == gen {
+                if cb.status == .completed { self.lastFrame?.output = outBuffer } else { self.lastFrame = nil }
+            }
             self.lock.unlock()
             if stale { return }   // flushed (seek) or released while in flight: drop
             if cb.status != .completed {

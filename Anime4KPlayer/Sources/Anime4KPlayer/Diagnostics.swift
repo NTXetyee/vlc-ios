@@ -36,6 +36,7 @@ public final class FrameStats {
     public struct Snapshot {
         public var gpuP50: Double = 0, gpuP95: Double = 0     // ms, measured with gpuStartTime/gpuEndTime
         public var upscaled = 0                                // frames that went through the model
+        public var reused = 0                                  // redisplays served from the last output (paused)
         public var late = 0                                    // finished after their presentation time
         public var passThrough: [String: Int] = [:]            // original frame shown, by reason
         public var sourceSize = "-", outputSize = "-", pixelFormat = "-"
@@ -57,6 +58,10 @@ public final class FrameStats {
         if late { s.late += 1 }
     }
 
+    func reused() {
+        lock.lock(); s.reused += 1; lock.unlock()
+    }
+
     func passThrough(_ reason: String) {
         lock.lock(); s.passThrough[reason, default: 0] += 1; lock.unlock()
     }
@@ -66,7 +71,7 @@ public final class FrameStats {
     }
 
     func resetCounters() {
-        lock.lock(); gpuMs.removeAll(); s.upscaled = 0; s.late = 0; s.passThrough = [:]; lock.unlock()
+        lock.lock(); gpuMs.removeAll(); s.upscaled = 0; s.reused = 0; s.late = 0; s.passThrough = [:]; lock.unlock()
     }
 
     public func snapshot() -> Snapshot {
@@ -96,7 +101,7 @@ extension FrameStats.Snapshot {
         \(engine) · \(passes) passes
         GPU p50 \(String(format: "%.1f", gpuP50)) ms · p95 \(String(format: "%.1f", gpuP95)) ms
         \(sourceSize) → \(outputSize) · \(pixelFormat)
-        upscaled \(upscaled) · late \(late)
+        upscaled \(upscaled) · reused \(reused) · late \(late)
         original: \(pt.isEmpty ? "0" : pt)
         build \(String(format: "%.0f", lastBuildMs)) ms · thermal \(thermal)
         """
